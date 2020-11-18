@@ -79,10 +79,78 @@ function apply_fast_cnot_error!(noise_params::Dict{Symbol, Float64},
     nothing
 end
 
+
 function exec_syndrome_layer(
         noise_params::Union{Nothing, Dict{Symbol, Float64}},
         syndrome_circuit::AbstractFastSyndrome,
         run::CodeDistanceRun,
+        layer_i::Int)
+    ctx = run.ctx
+    state = run.state
+    # Apply errors
+    p_data = layer_i == 1 ? :p_data_layer1 : :p_data
+    for q in ctx.data_qubits
+        apply_fast_error!(noise_params, state, run.zx_error_counts,
+                          p_data, (q,))
+    end
+    # Run circuit
+    for info in ctx.z_plaq_info
+        anc = info.ancilla
+        for dat in info.data
+            state.z[anc] ⊻= state.z[dat]  # CNOT
+        end
+    end
+    for info in ctx.x_plaq_info
+        anc = info.ancilla
+        for dat in info.data
+            state.x[anc] ⊻= state.x[dat]  # CNOT
+        end
+    end
+    # Apply errors
+    for info in ctx.z_plaq_info
+        anc = info.ancilla
+        for (i, dat) in enumerate(info.data)
+            apply_fast_cnot_error!(noise_params, state, run.zx_error_counts,
+                                   run.zx_meas_error_counts,
+                                   (i==1 ? :p_cnot1 : :p_cnot), dat, anc)
+        end
+    end
+    for info in ctx.x_plaq_info
+        anc = info.ancilla
+        for (i, dat) in enumerate(info.data)
+            apply_fast_cnot_error!(noise_params, state, run.zx_meas_error_counts,
+                                   run.zx_error_counts,
+                                   (i==1 ? :p_cnot1 : :p_cnot), anc, dat)
+        end
+    end
+    for info in ctx.z_plaq_info
+        apply_fast_error!(noise_params, state, run.zx_meas_error_counts,
+                          :p_anc_z, (info.ancilla,))
+    end
+    for info in ctx.x_plaq_info
+        apply_fast_error!(noise_params, state, run.zx_meas_error_counts,
+                          :p_anc_x, (info.ancilla,))
+    end
+    # Measure
+    for (i, info) in enumerate(ctx.z_plaq_info)
+        meas = state.z[info.ancilla]  # Measure
+        state.z[info.ancilla] = false  # Reset
+        run.z_syndromes[i, layer_i] = run.z_prev[i] ⊻ meas
+        run.z_prev[i] = meas
+    end
+    for (i, info) in enumerate(ctx.x_plaq_info)
+        meas = state.x[info.ancilla]  # Measure
+        state.x[info.ancilla] = false  # Reset
+        run.x_syndromes[i, layer_i] = run.x_prev[i] ⊻ meas
+        run.x_prev[i] = meas
+    end
+    nothing
+end
+
+function exec_syndrome_layer(
+        noise_params::Union{Nothing, Dict{Symbol, Float64}},
+        syndrome_circuit::AbstractFastSyndrome,
+        run::LogicalOpRun,
         layer_i::Int)
     ctx = run.ctx
     state = run.state
@@ -160,4 +228,50 @@ function simulate_syndrome_run(syndrome_circuit::AbstractFastSyndrome,
         exec_syndrome_layer(noise, syndrome_circuit, run, i)
     end
     run.z_syndromes, run.x_syndromes
+end
+
+function fast_rz_gate!(state::ChpState, theta::Float64, dist::Int, z_qubits::Vector{Int})
+    r = rand(rng, Float64, dist)
+    pI = cos(theta/2)^2
+    pZ = sin(theta/2)^2
+    projected=BitArray(undef, dist)
+    z_count = 0
+    for i in 1:dist
+        if r[i] < pI
+            projected[i]=0
+        end 
+        if r[i] >= pI
+            projected[i]=1
+            q = z_qubits[i]
+            #z_gate!(state, z_qubits[i])
+            state.x[q] ⊻= true  # Z gate
+            #println("z gate: ", q, " from ", z_qubits)
+            z_count += 1
+        end
+    end
+    z_count, projected
+end
+
+function simulate_logical_op_syndrome_run(syndrome_circuit::AbstractFastSyndrome,
+                               run::LogicalOpRun)
+    ctx = run.ctx
+    state = run.state
+    run.state.z[1:run.ctx.num_qubits] .= false  # Clean start
+    run.state.x[1:run.ctx.num_qubits] .= false
+    run.zx_error_counts .= 0
+    run.zx_meas_error_counts .= 0
+    #for q in ctx.data_qubits
+    #    hadamard!(state, q) # transversal hadamard
+    #end
+    exec_syndrome_layer(nothing, syndrome_circuit, run, 1)
+    z_count, projected = fast_rz_gate!(state, ctx.theta, ctx.z_dist, ctx.logical_z_qubits)
+    run.zx_error_counts[2] += z_count  # Z errors cause X syndromes
+
+    for i in 1:ctx.m_dist+1
+        # Noise-free end layer
+        noise = i == ctx.m_dist+1 ? nothing : run.sim_noise_params
+        #noise = nothing
+        exec_syndrome_layer(noise, syndrome_circuit, run, i)
+    end
+    run.z_syndromes, run.x_syndromes, projected
 end

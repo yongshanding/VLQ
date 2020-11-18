@@ -5,10 +5,11 @@ using BlossomV
 using ChpSim
 include("BiMaps.jl"); using .BiMaps
 
-export x_gate!, z_gate!, reset!, measure_reset!,
+export x_gate!, z_gate!, reset!, measure_reset!, rz_gate!,
     NoiseModel, SyndromeCircuit, BasicSyndrome,
-    CodeDistanceSim, CodeDistanceRun,
-    MatchingGraphWeights, apply_sim_error!, do_single_run, do_n_runs
+    CodeDistanceSim, CodeDistanceRun, LogicalOpSim, LogicalOpRun,
+    MatchingGraphWeights, apply_sim_error!, do_single_run, do_n_runs,
+    do_single_logical_op_run, do_n_logical_op_runs
 
 
 const rng = Random.GLOBAL_RNG
@@ -43,6 +44,27 @@ function measure_reset!(state::ChpState, qubit::Int)
         x_gate!(state, qubit)
     end
     meas
+end
+
+
+
+# New non-cliford gate, returns a list of sampled bits of length dist.
+# rz is translated as a stochastic Z flips along the logical operators
+function rz_gate!(state::ChpState, theta::Float64, dist::Int, z_qubits::Vector{Int})
+    r = rand(rng, Float64, dist)
+    pI = cos(theta/2)^2
+    pZ = sin(theta/2)^2
+    projected=BitArray(undef, dist)
+    for i in 1:dist
+        if r[i] < pI
+            projected[i]=0
+        end 
+        if r[i] >= pI
+            projected[i]=1
+            z_gate!(state, z_qubits[i])
+        end
+    end
+    pI, pZ, projected
 end
 
 
@@ -120,7 +142,7 @@ function CodeDistanceSim(z_dist::Int, x_dist::Int, m_dist::Int,
     (z_plaqs, z_space_boundary, z_doubled_boundary), (
         x_plaqs, x_space_boundary, x_doubled_boundary) = (
         make_plaqs(z_dist, x_dist))
-    num_qubits, anc_qubits, data_qubits, z_plaq_info, x_plaq_info = (
+    num_qubits, anc_qubits, data_qubits, z_plaq_info, x_plaq_info, _, _, _ = (
         make_qubit_assignments(z_dist, z_plaqs, x_dist, x_plaqs))
     z_graph_nodes, z_graph = (
         make_graph(m_dist+1, z_plaqs, z_space_boundary, false, false))
@@ -144,6 +166,85 @@ function CodeDistanceSim(z_dist::Int, x_dist::Int, m_dist::Int,
     )
 end
 
+#####################
+
+struct LogicalOpSim
+    z_dist::Int
+    x_dist::Int
+    m_dist::Int
+    theta::Float64
+    syndrome_circuit::SyndromeCircuit
+    noise_model::NoiseModel
+    num_qubits::Int
+    anc_qubits::Vector{Int}
+    z_anc_qubits::Vector{Int}
+    x_anc_qubits::Vector{Int}
+    data_qubits::Vector{Int}
+    logical_z_qubits::Vector{Int}
+    diagonal_x_ancilla::Vector{Int}
+    #logical_op_projection::AbstractArray{Bool}
+    z_plaqs::Vector{Tuple{Int, Int}}
+    z_plaq_info::Vector{PlaqInfoT}
+    z_space_boundary::Vector{Tuple{Int, Int}}
+    z_doubled_boundary::Vector{Tuple{Int, Int}}
+    z_graph_nodes::BiMap{NodeT, Int}
+    z_graph::Graph{Int}
+    z_costs::Matrix{Float64}
+    z_bpaths::Set{Tuple{Int, Int}}
+    z_path_lengths::Dict{Tuple{Int, Int}, Int}
+    x_plaqs::Vector{Tuple{Int, Int}}
+    x_plaq_info::Vector{PlaqInfoT}
+    x_space_boundary::Vector{Tuple{Int, Int}}
+    x_doubled_boundary::Vector{Tuple{Int, Int}}
+    x_graph_nodes::BiMap{NodeT, Int}
+    x_graph::Graph{Int}
+    x_costs::Matrix{Float64}
+    x_bpaths::Set{Tuple{Int, Int}}
+    x_path_lengths::Dict{Tuple{Int, Int}, Int}
+end
+
+function LogicalOpSim(dist::Int, theta::Float64, syndrome_circuit::SyndromeCircuit,
+                         noise_model::NoiseModel)
+    LogicalOpSim(dist, dist, dist, theta, syndrome_circuit, noise_model)
+end
+function LogicalOpSim(z_dist::Int, x_dist::Int, m_dist::Int, theta::Float64,
+                         syndrome_circuit::SyndromeCircuit, noise_model::NoiseModel)
+    # Graphs
+    (z_plaqs, z_space_boundary, z_doubled_boundary), (
+        x_plaqs, x_space_boundary, x_doubled_boundary) = (
+        make_plaqs(z_dist, x_dist))
+    # Qubits
+    num_qubits, anc_qubits, data_qubits, z_plaq_info, x_plaq_info, lz_qubits, z_anc_qubits, x_anc_qubits = (
+        make_qubit_assignments(z_dist, z_plaqs, x_dist, x_plaqs))
+    z_graph_nodes, z_graph = (
+        make_graph(m_dist+1, z_plaqs, z_space_boundary, false, false))
+    x_graph_nodes, x_graph = (
+        make_graph(m_dist+1, x_plaqs, x_space_boundary, false, false))
+
+    z_costs, z_bpaths, z_path_lengths = constuct_graph_costs(
+        z_graph_nodes, z_graph, z_doubled_boundary,
+        noise_model, syndrome_circuit, false, z_dist, m_dist)
+    x_costs, x_bpaths, x_path_lengths = constuct_graph_costs(
+        x_graph_nodes, x_graph, x_doubled_boundary,
+        noise_model, syndrome_circuit, true, x_dist, m_dist)
+    #lz_proj = BitArray(undef, z_dist) # dummy value for now
+    
+    diagonal_anc = diagonal_x_plaqs(x_plaq_info, lz_qubits)
+
+    LogicalOpSim(
+        z_dist, x_dist, m_dist, theta, syndrome_circuit, noise_model,
+        num_qubits, anc_qubits, z_anc_qubits, x_anc_qubits,
+        data_qubits, lz_qubits, diagonal_anc,
+        z_plaqs, z_plaq_info, z_space_boundary, z_doubled_boundary,
+            z_graph_nodes, z_graph, z_costs, z_bpaths, z_path_lengths,
+        x_plaqs, x_plaq_info, x_space_boundary, x_doubled_boundary,
+            x_graph_nodes, x_graph, x_costs, x_bpaths, x_path_lengths,
+    )
+end
+
+
+
+#####################
 
 function make_plaqs(z_dist, x_dist)
     z_plaqs = Tuple{Int, Int}[
@@ -188,9 +289,15 @@ function make_qubit_assignments(z_dist, z_plaqs, x_dist, x_plaqs)
         for x in 1:z_dist
         for y in 1:x_dist
     )
+    lz_qubits = Dict{Tuple{Int, Int}, Int}(
+        (z_dist-lz+1, lz) => data_qubits[(z_dist-lz+1, lz)]
+        for lz in 1:z_dist
+    )
     anc_qubits = Dict{Tuple{Int, Int}, Int}()
     append!(anc_qubits, xy => popfirst!(counter) for xy in z_plaqs)
+    z_anc_qubits = [anc_qubits[xy] for xy in z_plaqs]
     append!(anc_qubits, xy => popfirst!(counter) for xy in x_plaqs)
+    x_anc_qubits = [anc_qubits[xy] for xy in x_plaqs]
     num_qubits = length(data_qubits) + length(anc_qubits)
     make_plaq_info(plaqs)::Vector{PlaqInfoT} = [
         begin
@@ -207,7 +314,7 @@ function make_qubit_assignments(z_dist, z_plaqs, x_dist, x_plaqs)
     z_plaq_info = make_plaq_info(z_plaqs)
     x_plaq_info = make_plaq_info(x_plaqs)
     (num_qubits, collect(values(anc_qubits)), collect(values(data_qubits)),
-        z_plaq_info, x_plaq_info)
+        z_plaq_info, x_plaq_info, collect(values(lz_qubits)), z_anc_qubits, x_anc_qubits)
 end
 function make_graph(m_dist, plaqs, space_boundary,
                     start_boundary::Bool, end_boundary::Bool)
@@ -291,7 +398,24 @@ function make_graph(m_dist, plaqs, space_boundary,
     end
     graph_nodes, graph
 end
-
+function diagonal_x_plaqs(x_plaq_info, logical_z_qubits)
+    # check if neighbor has lz_qubits
+    plaqs = x_plaq_info
+    lz_qubits = logical_z_qubits
+    res = Vector{Int}()
+    for p in plaqs
+        #println(p[:data])
+        if size(p[:data]) == (4,)
+            for d in p[:data]
+                if d in lz_qubits
+                    append!(res, p[:ancilla])
+                    break
+                end
+            end
+        end
+    end
+    res
+end
 
 """
 Used by construct_graph_costs().
@@ -423,8 +547,50 @@ function CodeDistanceRun(ctx::CodeDistanceSim)
     )
 end
 
+struct LogicalOpRun
+    ctx::LogicalOpSim
+    state::ChpState
+    zx_error_counts::Vector{Int}
+    zx_meas_error_counts::Vector{Int}
+    z_prev::Vector{Bool}
+    x_prev::Vector{Bool}
+    z_syndromes::Matrix{Bool}
+    x_syndromes::Matrix{Bool}
+    sim_noise_params::Dict{Symbol, Float64}
+end
+function LogicalOpRun(ctx::LogicalOpSim)
+    state = ChpState(ctx.num_qubits, bitpack=false)
+    zx_error_counts = Int[0, 0]
+    zx_meas_error_counts = Int[0, 0]
+    z_prev = zeros(Bool, length(ctx.z_plaqs))
+    x_prev = zeros(Bool, length(ctx.x_plaqs))
+    z_syndromes = Matrix{Bool}(undef, length(z_prev), ctx.m_dist+1)
+    x_syndromes = Matrix{Bool}(undef, length(x_prev), ctx.m_dist+1)
+    sim_noise_params = simulation_noise_parameters(ctx.syndrome_circuit,
+                                                   ctx.noise_model, ctx)
+    #sim_noise_params = nothing
+    LogicalOpRun(
+        ctx, state, zx_error_counts, zx_meas_error_counts,
+        z_prev, x_prev, z_syndromes, x_syndromes,
+        sim_noise_params,
+    )
+end
+
+
+
+
 function simulation_noise_parameters(::SyndromeCircuit, model::NoiseModel,
                                      ctx::CodeDistanceSim)
+    Dict{Symbol, Float64}(
+        p_data => model.uniform_data,
+        p_anc_z => model.uniform_anc,
+        p_anc_x => model.uniform_anc,
+        p_cnot1 => 0,
+        p_cnot => 0,
+    )
+end
+function simulation_noise_parameters(::SyndromeCircuit, model::NoiseModel,
+                                     ctx::LogicalOpSim)
     Dict{Symbol, Float64}(
         p_data => model.uniform_data,
         p_anc_z => model.uniform_anc,
@@ -509,6 +675,20 @@ function exec_syndrome_layer(noise_model::Union{NoiseModel, Nothing},
     nothing
 end
 
+function reset_all_qubits!(run::CodeDistanceRun)
+    run.state.z[1:run.ctx.num_qubits] .= false  # Clean start
+    run.state.x[1:run.ctx.num_qubits] .= false
+    run.zx_error_counts .= 0
+    run.zx_meas_error_counts .= 0
+end
+
+function reset_all_qubits!(run::LogicalOpRun)
+    run.state.z[1:run.ctx.num_qubits] .= false  # Clean start
+    run.state.x[1:run.ctx.num_qubits] .= false
+    run.zx_error_counts .= 0
+    run.zx_meas_error_counts .= 0
+end
+
 """
     simulate_syndrome_run(run)
 
@@ -519,7 +699,7 @@ function simulate_syndrome_run(run::CodeDistanceRun)
 end
 function simulate_syndrome_run(syndrome_circuit::SyndromeCircuit, run::CodeDistanceRun)
     ctx = run.ctx
-    reset_all_qubits!(run.state)  # Clean start
+    reset_all_qubits!(run)  # Clean start
     run.zx_error_counts .= 0
     run.zx_meas_error_counts .= 0
     exec_syndrome_layer(nothing, syndrome_circuit, run, 1)
@@ -530,10 +710,47 @@ function simulate_syndrome_run(syndrome_circuit::SyndromeCircuit, run::CodeDista
     run.z_syndromes, run.x_syndromes
 end
 
+
+function simulate_logical_op_syndrome_run(run::LogicalOpRun)
+    simulate_logical_op_syndrome_run(run.ctx.syndrome_circuit, run)
+end
+function simulate_logical_op_syndrome_run(syndrome_circuit::SyndromeCircuit, run::LogicalOpRun)
+    ctx = run.ctx
+    reset_all_qubits!(run)  # Clean start
+    state = run.state
+    run.zx_error_counts .= 0
+    run.zx_meas_error_counts .= 0
+    # Logical operation
+    for q in ctx.data_qubits
+        hadamard!(state, q) # transversal hadamard
+    end
+    #ctx.logical_op_projection = projected
+
+    exec_syndrome_layer(nothing, syndrome_circuit, run, 1)
+
+    _, _, projected = rz_gate!(state, ctx.theta, ctx.z_dist, ctx.logical_z_qubits)
+    for i in 1:ctx.m_dist+1
+        noise = i == ctx.m_dist+1 ? nothing : ctx.noise_model  # Noise-free end layer
+        exec_syndrome_layer(noise, syndrome_circuit, run, i)
+    end
+    run.z_syndromes, run.x_syndromes, projected
+end
+
+
 function syndromes_to_error_ids(syndromes, plaqs, graph_nodes)
     @assert size(syndromes)[1] == length(plaqs)
     Int[
         graph_nodes[(t, :plaq, plaqs[i]...)]
+        for t in axes(syndromes, 2)
+        for i in axes(syndromes, 1)
+        if syndromes[i, t]
+    ]
+end
+
+function syndromes_to_all_errors(syndromes, anc_ids)
+    @assert size(syndromes)[1] == length(anc_ids) # same order as plaqs
+    Int[
+        anc_ids[i]
         for t in axes(syndromes, 2)
         for i in axes(syndromes, 1)
         if syndromes[i, t]
@@ -622,5 +839,71 @@ function do_n_runs(run::CodeDistanceRun, n::Int, z_only::Bool=false)
             fail_count += z_fail || x_fail
         end
     end
+    #println(fail_count)
     return fail_count / n
 end
+
+#############################################
+
+
+function do_single_logical_op_run(run::LogicalOpRun, z_only::Bool=false)
+    z_syndromes, x_syndromes, projected = simulate_logical_op_syndrome_run(run)
+    # if syndromes along the diagonal region, discard: todo
+    discarded = false
+    #z_errors, x_errors = run.zx_error_counts
+    
+    ctx = run.ctx
+    x_ancs = ctx.x_anc_qubits
+    error_ids = syndromes_to_all_errors(x_syndromes, x_ancs)
+    #for err in error_ids
+    #    if err in ctx.diagonal_x_ancilla
+    #        discarded = true
+    #    end
+    #end
+    if length(error_ids) > 0 # discard if any error detected
+        discarded = true
+    end
+    if discarded == false
+        theta = ctx.theta
+        amp_I = cos(theta/2)
+        amp_Z = sin(theta/2)
+        dist = ctx.z_dist
+        weight = sum(projected)
+        #if 0 < weight < ctx.z_dist 
+        #    println(projected)
+        #end
+        # Actual logical space Z expected value sin(theta_L/2)
+        actual_op = (amp_Z^(dist-weight)*amp_I^(weight)) / (sqrt(amp_I^(2*(dist-weight))*amp_Z^(2*weight) + amp_Z^(2*(dist-weight))*amp_I^(2*weight)))
+    else
+        actual_op = 0.0
+    end
+
+    discarded, actual_op
+end
+
+function do_n_logical_op_runs(run::LogicalOpRun, n::Int, z_only::Bool=false)
+    fail_count = 0
+    ctx = run.ctx
+    diagonal_anc = ctx.diagonal_x_ancilla
+    theta = ctx.theta
+    amp_I = cos(theta/2)
+    amp_Z = sin(theta/2)
+    dist = ctx.z_dist
+    # Predicted logical space Z expected value for sin(theta_L/2)
+    ideal_op = (amp_Z^dist)/(sqrt(amp_I^(2*dist) + amp_Z^(2*dist)))
+    actual_sum = 0.0
+    for _ in 1:n
+        discarded, actual_op = do_single_logical_op_run(run)
+        if discarded
+            fail_count += 1
+        else
+            actual_sum += actual_op
+        end
+    end
+    actual_avg = n == fail_count ? 0.0 : actual_sum / (n-fail_count)
+    fail_rate = fail_count / n
+    #println(actual_avg, " ", actual_sum, " ", fail_count)
+    return fail_rate, ideal_op, actual_avg
+end        
+
+

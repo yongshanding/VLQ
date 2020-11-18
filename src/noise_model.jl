@@ -201,6 +201,28 @@ function simulation_noise_parameters(::TypicalSyndrome, model::NoiseModel,
         :p_cnot => model.p_tt,
     )
 end
+function simulation_noise_parameters(::TypicalSyndrome, model::NoiseModel,
+                                     ctx::LogicalOpSim)
+    t_data = 4*model.dur_tt + 2*model.dur_t + model.dur_meas
+    t_anc_z = 4*model.dur_tt
+    t_anc_x = 4*model.dur_tt + 2*model.dur_t
+    Dict{Symbol, Float64}(
+        :p_data_layer1 => coherence_error(model.t1_t, t_data),
+        :p_data => coherence_error(model.t1_t, t_data),
+        :p_anc_z => combine_error_probs(
+            calculate_qubit_error_single_pauli(model,
+                t_t = t_anc_z,
+                n_t = 0),
+            model.p_meas),
+        :p_anc_x => combine_error_probs(
+            calculate_qubit_error_single_pauli(model,
+                t_t = t_anc_x,
+                n_t = 2),
+            model.p_meas),
+        :p_cnot1 => model.p_tt,
+        :p_cnot => model.p_tt,
+    )
+end
 
 ############################################
 
