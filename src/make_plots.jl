@@ -76,9 +76,9 @@ function setup(; num_workers=16)
         run = VLQ.LogicalOpRun(ctx)
         loops = div(samples, step)
         reduce((x, y) -> x .+ y, 
-                let (r, s, t) = VLQ.do_n_logical_op_runs(run, step, false)
+                let (r, s, t, le) = VLQ.do_n_logical_op_runs(run, step, false)
                     ccall(:jl_gc_collect, Nothing, ())
-                    (r, s, t)
+                    (r, s, t, le)
                 end
                 for _ in 1:loops
         ) ./ loops
@@ -91,19 +91,23 @@ function x_axis_for_plot(plot_i)
         10 .^ LinRange(log10(0.1), log10(0.0001), 19)[4:end-2]
     elseif 2 <= plot_i <= 3
         2 .^ LinRange(log2(1/2), log2(1/1048576), 20)
+    elseif plot_i == 4
+        2 .^ LinRange(log2(1/2), log2(1/1048576), 20)
     end
 end
 function confs_for_plot(plot_i, dists, samples)
     if plot_i == 1
         confs_for_thresh_plot(plot_i, dists, samples)
-    else
+    elseif 2 <= plot_i <= 3
         confs_for_logical_op_plot(plot_i, dists, samples)
+    elseif plot_i == 4
+        confs_for_cost_plot(plot_i, dists, samples)
     end
 end
 function confs_for_thresh_plot(plot_i, dists, samples)
     x_arr = x_axis_for_plot(plot_i)
     syndrom_sym = :TypicalSyndrome
-    th = pi/16
+    th = pi/8
     [
         (plot_i, syndrom_sym, d, e, th, nothing, samples)
         for e in x_arr
@@ -112,14 +116,22 @@ function confs_for_thresh_plot(plot_i, dists, samples)
 end
 function confs_for_logical_op_plot(plot_i, dists, samples)
     x_arr = x_axis_for_plot(plot_i)
-    e = 0.0001
+    e = 0.001
     [
         (plot_i, :TypicalSyndrome, d, e, th, nothing, samples)
         for th in x_arr
         for d in dists
     ]
 end
-
+function confs_for_cost_plot(plot_i, dists, samples)
+    x_arr = x_axis_for_plot(plot_i)
+    e = 0.01
+    [
+        (plot_i, :TypicalSyndrome, d, e, th, nothing, samples)
+        for th in x_arr
+        for d in dists
+    ]
+end
 function dist_calc_all(job_id, dists, samples, which_plots=1:12)
     confs = []
     for i in which_plots
@@ -128,9 +140,9 @@ function dist_calc_all(job_id, dists, samples, which_plots=1:12)
     Jobs.run_on_workers(job_id, Main.everywhere_calc_single, confs)
 end
 
-function fetch_finished(job_id, plot_i, default::Tuple{Float64,Float64,Float64}=(1.0,1.0,1.0))
+function fetch_finished(job_id, plot_i, default::Tuple{Float64,Float64,Float64,Float64}=(1.0,1.0,1.0,1.0))
     x_arr = x_axis_for_plot(plot_i)
-    y_arr_dict = Dict{Int, Vector{Tuple{Float64,Float64,Float64}}}()
+    y_arr_dict = Dict{Int, Vector{Tuple{Float64,Float64,Float64,Float64}}}()
     results = Jobs.current_results(job_id)
     for ((res_plot_i, _, d, e, th,  _, _), val) in results
         res_plot_i == plot_i || continue
@@ -139,7 +151,9 @@ function fetch_finished(job_id, plot_i, default::Tuple{Float64,Float64,Float64}=
         end
         if plot_i == 1
             i = indexin([e], x_arr)[1]
-        else
+        elseif 2 <= plot_i <= 3
+            i = indexin([th], x_arr)[1]
+        elseif plot_i == 4
             i = indexin([th], x_arr)[1]
         end
         i === nothing || (y_arr_dict[d][i] = val)

@@ -850,6 +850,7 @@ function do_single_logical_op_run(run::LogicalOpRun, z_only::Bool=false)
     z_syndromes, x_syndromes, projected = simulate_logical_op_syndrome_run(run)
     # if syndromes along the diagonal region, discard: todo
     discarded = false
+    logical_err = false
     #z_errors, x_errors = run.zx_error_counts
     
     ctx = run.ctx
@@ -869,6 +870,10 @@ function do_single_logical_op_run(run::LogicalOpRun, z_only::Bool=false)
         amp_Z = sin(theta/2)
         dist = ctx.z_dist
         weight = sum(projected)
+        if 0 < weight < dist
+            logical_err = true
+            #println(projected)
+        end
         #if 0 < weight < ctx.z_dist 
         #    println(projected)
         #end
@@ -878,11 +883,12 @@ function do_single_logical_op_run(run::LogicalOpRun, z_only::Bool=false)
         actual_op = 0.0
     end
 
-    discarded, actual_op
+    discarded, logical_err, actual_op
 end
 
 function do_n_logical_op_runs(run::LogicalOpRun, n::Int, z_only::Bool=false)
     fail_count = 0
+    logical_err_count = 0
     ctx = run.ctx
     diagonal_anc = ctx.diagonal_x_ancilla
     theta = ctx.theta
@@ -893,17 +899,22 @@ function do_n_logical_op_runs(run::LogicalOpRun, n::Int, z_only::Bool=false)
     ideal_op = (amp_Z^dist)/(sqrt(amp_I^(2*dist) + amp_Z^(2*dist)))
     actual_sum = 0.0
     for _ in 1:n
-        discarded, actual_op = do_single_logical_op_run(run)
+        discarded, logical_err, actual_op = do_single_logical_op_run(run)
         if discarded
             fail_count += 1
+        elseif logical_err
+            logical_err_count += 1
+            actual_sum += actual_op
         else
             actual_sum += actual_op
         end
     end
+    #println(logical_err_count, " ", n, " ", fail_count)
     actual_avg = n == fail_count ? 0.0 : actual_sum / (n-fail_count)
+    logical_err_rate = n == fail_count ? 0.0 : logical_err_count / (n-fail_count)
     fail_rate = fail_count / n
     #println(actual_avg, " ", actual_sum, " ", fail_count)
-    return fail_rate, ideal_op, actual_avg
+    return fail_rate, ideal_op, actual_avg, logical_err_rate 
 end        
 
 
