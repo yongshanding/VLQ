@@ -21,11 +21,11 @@ starting_model = Dict{Symbol, Float64}(
     :dur_tc => 200,  # ns
     :dur_loadstore => 150,  # ns
     :dur_meas => 200,  # ns
-    :p_t => p0 / 10,
-    :p_tt => p0,
+    :p_t => p0, # single-qubit error rate
+    :p_tt => p0, # two-qubit error rate, could be a factor of 10 wrt p_t
     :p_tc => p0,
     :p_loadstore => p0,
-    :p_meas => p0,
+    :p_meas => p0, # measurement error rate
     :cavity_depth => 10,
 )
 const_keys = [:dur_tt, :dur_t, :dur_tc, :dur_loadstore, :dur_meas,
@@ -94,7 +94,7 @@ function calculate_qubit_error_single_pauli(model::NoiseModel;
         n_loadstore::Int = 0,
         n_meas::Int = 0,
     )
-    combine_flip_probs(
+    p = combine_flip_probs(
         2/3 * coherence_error(model.t1_t, t_t),
         2/3 * coherence_error(model.t1_c, t_c),
         repeat([2/3*model.p_t], n_t)...,
@@ -103,6 +103,7 @@ function calculate_qubit_error_single_pauli(model::NoiseModel;
         repeat([2/3*model.p_loadstore], n_loadstore)...,
         repeat([model.p_meas], n_meas)...,
     )
+    p
 end
 
 # Typical Syndrome
@@ -135,6 +136,7 @@ function simulation_noise_parameters(::TypicalSyndrome, model::NoiseModel,
     t_data = 4*model.dur_tt + 2*model.dur_t + model.dur_meas
     t_anc_z = 4*model.dur_tt
     t_anc_x = 4*model.dur_tt + 2*model.dur_t
+
     Dict{Symbol, Float64}(
         :p_data_layer1 => coherence_error(model.t1_t, t_data),
         :p_data => coherence_error(model.t1_t, t_data),
@@ -206,19 +208,29 @@ function simulation_noise_parameters(::TypicalSyndrome, model::NoiseModel,
     t_data = 4*model.dur_tt + 2*model.dur_t + model.dur_meas
     t_anc_z = 4*model.dur_tt
     t_anc_x = 4*model.dur_tt + 2*model.dur_t
-    Dict{Symbol, Float64}(
-        :p_data_layer1 => coherence_error(model.t1_t, t_data),
-        :p_data => coherence_error(model.t1_t, t_data),
-        :p_anc_z => combine_error_probs(
+    p_data = combine_error_probs(
+            calculate_qubit_error_single_pauli(model,
+                t_t = t_data,
+                n_t = 2),
+            coherence_error(model.t1_t, t_data))
+    #println("e: ", model.p_tt, " p_data: ", p_data)
+    p_anc_z = combine_error_probs(
             calculate_qubit_error_single_pauli(model,
                 t_t = t_anc_z,
                 n_t = 0),
-            model.p_meas),
-        :p_anc_x => combine_error_probs(
+            model.p_meas)
+    #println("e: ", model.p_tt, " p_anc_z: ", p_anc_z)
+    p_anc_x = combine_error_probs(
             calculate_qubit_error_single_pauli(model,
                 t_t = t_anc_x,
                 n_t = 2),
-            model.p_meas),
+            model.p_meas)
+    #println("e: ", model.p_tt, " p_anc_x: ", p_anc_z)
+    Dict{Symbol, Float64}(
+        :p_data_layer1 => coherence_error(model.t1_t, t_data),
+        :p_data => p_data,
+        :p_anc_z => p_anc_z,
+        :p_anc_x => p_anc_x,
         :p_cnot1 => model.p_tt,
         :p_cnot => model.p_tt,
     )
