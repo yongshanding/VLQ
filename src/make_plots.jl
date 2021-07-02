@@ -92,7 +92,8 @@ function x_axis_for_plot(plot_i)
     elseif 2 <= plot_i <= 3
         2 .^ LinRange(log2(1/2), log2(1/1048576), 20)
     elseif plot_i == 4
-        10 .^ LinRange(log10(pi/4), log10(0.001), 20)
+        #10 .^ LinRange(log10(pi/4), log10(0.001), 20)
+        [x for x in LinRange(pi/3/20,pi/3,20)]
     end
 end
 function confs_for_plot(plot_i, dists, samples)
@@ -106,7 +107,7 @@ function confs_for_plot(plot_i, dists, samples)
 end
 function confs_for_thresh_plot(plot_i, dists, samples)
     x_arr = x_axis_for_plot(plot_i)
-    syndrom_sym = :TypicalSyndrome
+    syndrom_sym = :SimpleSyndrome
     th = pi/8
     [
         (plot_i, syndrom_sym, d, e, th, nothing, samples)
@@ -116,18 +117,18 @@ function confs_for_thresh_plot(plot_i, dists, samples)
 end
 function confs_for_logical_op_plot(plot_i, dists, samples)
     x_arr = x_axis_for_plot(plot_i)
-    e = 0.001
+    e = 0.006
     [
-        (plot_i, :TypicalSyndrome, d, e, th, nothing, samples)
+        (plot_i, :SimpleSyndrome, d, e, th, nothing, samples)
         for th in x_arr
         for d in dists
     ]
 end
 function confs_for_cost_plot(plot_i, dists, samples)
     x_arr = x_axis_for_plot(plot_i)
-    e = 0.001
+    e = 0.006
     [
-        (plot_i, :TypicalSyndrome, d, e, th, nothing, samples)
+        (plot_i, :SimpleSyndrome, d, e, th, nothing, samples)
         for th in x_arr
         for d in dists
     ]

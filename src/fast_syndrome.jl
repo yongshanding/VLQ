@@ -15,6 +15,8 @@ function apply_fast_error!(noise_params::Dict{Symbol, Float64},
     p == 0 && return
     # TODO: rng
     z_count = x_count = 0
+    #kk = string(kind)
+    #println("kind: ", kk, ", p: ", p)
     for q in qubits
         r = rand(rng, Float64)
         r >= p && return

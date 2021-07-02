@@ -1,10 +1,11 @@
-export TypicalSyndrome, NaturalAllAtOnce, NaturalInterleaved, CompactAllAtOnce,
+export TypicalSyndrome, SimpleSyndrome, NaturalAllAtOnce, NaturalInterleaved, CompactAllAtOnce,
     CompactInterleaved,
     make_noise_model_for_paper
 
 
 # The different circuits evaluated
 struct TypicalSyndrome <: AbstractFastSyndrome end
+struct SimpleSyndrome <: AbstractFastSyndrome end
 struct NaturalAllAtOnce <: AbstractFastSyndrome end
 struct NaturalInterleaved <: AbstractFastSyndrome end
 struct CompactAllAtOnce <: AbstractFastSyndrome end
@@ -12,7 +13,7 @@ struct CompactInterleaved <: AbstractFastSyndrome end
 
 
 ### Make the noise model used in the paper
-p0 = 0.1
+p0 = 0.6
 starting_model = Dict{Symbol, Float64}(
     :t1_t => 100_000,  # ns
     :t1_c => 1_000_000,  # ns
@@ -201,6 +202,69 @@ function simulation_noise_parameters(::TypicalSyndrome, model::NoiseModel,
             model.p_meas),
         :p_cnot1 => model.p_tt,
         :p_cnot => model.p_tt,
+    )
+end
+
+function matching_space_edge(::SimpleSyndrome, model::NoiseModel,
+                             is_x::Bool, dist::Int, first_layer::Bool)
+    # Mainly 4 CNOTs; one per plaquette
+    p = calculate_qubit_error_single_pauli(model,
+        t_t = 4*model.dur_tt + 2*model.dur_t + model.dur_meas,
+        n_t = 0,
+        n_tt = 4,
+    )
+    -log(p)
+end
+function matching_time_edge(::SimpleSyndrome, model::NoiseModel,
+                            is_x::Bool, dist::Int, first_layer::Bool)
+    # Mainly 4 CNOTs
+    # Also two Hadamards if is X
+    p = calculate_qubit_error_single_pauli(model,
+        t_t = 4*model.dur_tt + (is_x ? 2*model.dur_t : 0),
+        n_t = (is_x ? 2 : 0),
+        n_tt = 4,
+        n_meas = 1,
+    )
+    -log(p)
+end
+function simulation_noise_parameters(::SimpleSyndrome, model::NoiseModel,
+                                     ctx::LogicalOpSim)
+    t_data = 4*model.dur_tt + 2*model.dur_t + model.dur_meas
+    t_anc_z = 4*model.dur_tt
+    t_anc_x = 4*model.dur_tt + 2*model.dur_t
+    p_data = combine_error_probs(
+            calculate_qubit_error_single_pauli(model,
+                t_t = t_data,
+                n_t = 2),
+            coherence_error(model.t1_t, t_data))
+    #println("e: ", model.p_tt, " p_data: ", p_data)
+    p_anc_z = combine_error_probs(
+            calculate_qubit_error_single_pauli(model,
+                t_t = t_anc_z,
+                n_t = 0),
+            model.p_meas)
+    #println("e: ", model.p_tt, " p_anc_z: ", p_anc_z)
+    p_anc_x = combine_error_probs(
+            calculate_qubit_error_single_pauli(model,
+                t_t = t_anc_x,
+                n_t = 2),
+            model.p_meas)
+    #println("p_t: ", model.p_t)
+    #Dict{Symbol, Float64}(
+    #    :p_data_layer1 => coherence_error(model.t1_t, t_data),
+    #    :p_data => p_data,
+    #    :p_anc_z => p_anc_z,
+    #    :p_anc_x => p_anc_x,
+    #    :p_cnot1 => model.p_tt,
+    #    :p_cnot => model.p_tt,
+    #)
+    Dict{Symbol, Float64}(
+        :p_data_layer1 => 0,
+        :p_data => model.p_t,
+        :p_anc_z => model.p_t,
+        :p_anc_x => model.p_t,
+        :p_cnot1 => 0,
+        :p_cnot => 0,
     )
 end
 function simulation_noise_parameters(::TypicalSyndrome, model::NoiseModel,
